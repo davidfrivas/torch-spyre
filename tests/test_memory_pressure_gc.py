@@ -29,8 +29,6 @@ These tests verify the acceptance criteria from issue P1-31:
 import gc
 import threading
 import time
-import weakref
-from typing import List
 
 import pytest
 import torch
@@ -46,18 +44,18 @@ class TestMemoryPressureGC:
         # Ensure GC is enabled at start
         gc.enable()
         gc.collect()
-        
+
         # Synchronize device before test to ensure clean state
         try:
             torch_spyre.synchronize()
         except Exception:
             pass  # Ignore errors if device is already in error state
-        
+
         yield
-        
+
         # Cleanup after test
         gc.collect()
-        
+
         # Synchronize device after test to clear any pending operations
         try:
             torch_spyre.synchronize()
@@ -72,32 +70,32 @@ class TestMemoryPressureGC:
         """
         # Disable automatic GC to control when collection happens
         gc.disable()
-        
+
         try:
             # Allocate tensors to fill most of available memory
             # Use a list to hold references, then clear it
             tensors = []
             tensor_size = 1024 * 1024 * 1024  # 1GB each
             num_tensors = 6  # Allocate 6GB
-            
+
             for i in range(num_tensors):
-                t = torch.randn(tensor_size // 4, device='spyre')  # float32 = 4 bytes
+                t = torch.randn(tensor_size // 4, device="spyre")  # float32 = 4 bytes
                 tensors.append(t)
-            
+
             # Drop all references (simulate Python losing references to tensors)
             tensors.clear()
-            
+
             # At this point, tensors are dead but not collected (GC disabled)
             # Next allocation should trigger memory pressure callback
             # Callback will run gc.collect(), free the dead tensors, and succeed
-            
+
             # This allocation should succeed after GC
-            new_tensor = torch.randn(tensor_size // 4, device='spyre')
-            
+            new_tensor = torch.randn(tensor_size // 4, device="spyre")
+
             # Verify allocation succeeded
-            assert new_tensor.device.type == 'spyre'
+            assert new_tensor.device.type == "spyre"
             assert new_tensor.numel() == tensor_size // 4
-            
+
         finally:
             # Re-enable GC
             gc.enable()
@@ -110,7 +108,7 @@ class TestMemoryPressureGC:
         did not loop or hang).
         """
         gc.disable()
-        
+
         # Allocate tensors and KEEP references
         tensors = []
         try:
@@ -118,18 +116,18 @@ class TestMemoryPressureGC:
             # Device has ~103GB capacity (103079215104 bytes)
             # Allocate ~96GB to leave room for the final allocation attempt to trigger OOM
             num_tensors = 48  # 48 * 2GB = 96GB
-            
+
             for i in range(num_tensors):
-                t = torch.randn(tensor_size // 4, device='spyre')
+                t = torch.randn(tensor_size // 4, device="spyre")
                 tensors.append(t)
-            
+
             # Try to allocate more - should trigger GC, find nothing to free, raise OOM
             with pytest.raises(RuntimeError, match="out of memory|OOM|OutOfMemory"):
                 # This should fail after GC finds nothing to collect
-                torch.randn(tensor_size // 4, device='spyre')
-            
+                torch.randn(tensor_size // 4, device="spyre")
+
             # Verify we didn't hang or loop infinitely (test completes)
-            
+
         finally:
             # Cleanup
             tensors.clear()
@@ -144,56 +142,56 @@ class TestMemoryPressureGC:
         No deadlock; no allocator-state corruption.
         """
         gc.enable()
-        
+
         allocation_succeeded = threading.Event()
         error_occurred = threading.Event()
-        
+
         def allocate_with_pressure():
             """Thread that will hit memory pressure."""
             try:
                 # Allocate less memory to avoid actual OOM, just trigger pressure
                 tensors = []
                 for i in range(4):
-                    t = torch.randn(256 * 1024 * 1024, device='spyre')  # 1GB each
+                    t = torch.randn(256 * 1024 * 1024, device="spyre")  # 1GB each
                     tensors.append(t)
-                
+
                 # Drop refs to allow GC
                 tensors.clear()
-                
+
                 # Small delay to let GC potentially run
                 time.sleep(0.05)
-                
+
                 # This should trigger memory pressure callback
-                t = torch.randn(256 * 1024 * 1024, device='spyre')
+                t = torch.randn(256 * 1024 * 1024, device="spyre")
                 allocation_succeeded.set()
-                
+
             except Exception as e:
                 print(f"Allocation thread error: {e}")
                 error_occurred.set()
-        
+
         def hold_gil_briefly():
             """Thread that holds GIL doing Python work."""
             # Do some Python work that holds GIL
             for i in range(500):  # Reduced iterations
                 _ = [j**2 for j in range(100)]
                 time.sleep(0.001)
-        
+
         # Start both threads
         t1 = threading.Thread(target=allocate_with_pressure)
         t2 = threading.Thread(target=hold_gil_briefly)
-        
+
         t1.start()
         time.sleep(0.1)  # Let t1 start allocating
         t2.start()
-        
+
         # Wait for completion with timeout
         t1.join(timeout=15.0)  # Increased timeout
         t2.join(timeout=15.0)
-        
+
         # Verify no deadlock (threads completed)
         assert not t1.is_alive(), "Allocation thread deadlocked"
         assert not t2.is_alive(), "GIL-holding thread deadlocked"
-        
+
         # Verify allocation succeeded or failed cleanly (no corruption)
         assert allocation_succeeded.is_set() or error_occurred.is_set()
 
@@ -203,33 +201,33 @@ class TestMemoryPressureGC:
         released by pressure-triggered GC, not just refcount-zero tensors.
         """
         gc.disable()
-        
+
         try:
             # Create tensors with reference cycles
             class TensorHolder:
                 def __init__(self, tensor):
                     self.tensor = tensor
-                    self.ref: 'TensorHolder | None' = None  # Will create cycle
-            
+                    self.ref: "TensorHolder | None" = None  # Will create cycle
+
             holders = []
             tensor_size = 1024 * 1024 * 1024  # 1GB
-            
+
             # Create 4 tensors with reference cycles
             for i in range(4):
-                t = torch.randn(tensor_size // 4, device='spyre')
+                t = torch.randn(tensor_size // 4, device="spyre")
                 holder = TensorHolder(t)
                 holder.ref = holder  # Create cycle
                 holders.append(holder)
-            
+
             # Break external references but cycles remain
             holders.clear()
-            
+
             # Tensors are now only reachable via cycles
             # Next allocation should trigger GC, collect cycles, and succeed
-            new_tensor = torch.randn(tensor_size // 4, device='spyre')
-            
-            assert new_tensor.device.type == 'spyre'
-            
+            new_tensor = torch.randn(tensor_size // 4, device="spyre")
+
+            assert new_tensor.device.type == "spyre"
+
         finally:
             gc.enable()
             gc.collect()
@@ -241,68 +239,67 @@ class TestMemoryPressureGC:
         (b) GC is invoked at most once per pressure window, (c) no hangs/corruption.
         """
         gc.enable()
-        
+
         num_threads = 4
         results = []
         results_lock = threading.Lock()
-        
+
         # Track GC collections
         gc_count_before = gc.get_count()[0]
-        
+
         def allocate_until_pressure(thread_id):
             """Each thread tries to allocate until hitting pressure."""
             try:
                 tensors = []
                 # Each thread allocates 2GB
                 for i in range(2):
-                    t = torch.randn(512 * 1024 * 1024, device='spyre')
+                    t = torch.randn(512 * 1024 * 1024, device="spyre")
                     tensors.append(t)
-                
+
                 # Drop some refs to allow GC to help
                 if thread_id % 2 == 0:
                     tensors.clear()
-                
+
                 # Try one more allocation - may succeed or fail
-                t = torch.randn(256 * 1024 * 1024, device='spyre')
-                
+                t = torch.randn(256 * 1024 * 1024, device="spyre")
+
                 with results_lock:
-                    results.append(('success', thread_id))
-                    
-            except RuntimeError as e:
+                    results.append(("success", thread_id))
+
+            except RuntimeError:
                 with results_lock:
-                    results.append(('oom', thread_id))
+                    results.append(("oom", thread_id))
             except Exception as e:
                 with results_lock:
-                    results.append(('error', thread_id, str(e)))
-        
+                    results.append(("error", thread_id, str(e)))
+
         # Launch threads
         threads = []
         for i in range(num_threads):
             t = threading.Thread(target=allocate_until_pressure, args=(i,))
             threads.append(t)
             t.start()
-        
+
         # Wait for all threads with timeout
         for t in threads:
             t.join(timeout=15.0)
-        
+
         # Verify no threads hung
         for t in threads:
             assert not t.is_alive(), "Thread deadlocked or hung"
-        
+
         # Verify all threads completed with clean result
         assert len(results) == num_threads
-        
+
         # Verify no corruption - all results are valid
         for result in results:
-            assert result[0] in ('success', 'oom', 'error')
-            if result[0] == 'error':
+            assert result[0] in ("success", "oom", "error")
+            if result[0] == "error":
                 pytest.fail(f"Thread {result[1]} had unexpected error: {result[2]}")
-        
+
         # Note: We can't easily verify GC was called exactly once per pressure window
         # from Python, but the C++ implementation ensures this
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
-
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
