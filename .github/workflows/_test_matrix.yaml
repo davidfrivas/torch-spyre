@@ -121,6 +121,8 @@ jobs:
             config: torch_spyre_tests/test_prepare_kernel_config.yaml
           - name: Test Allocator E2E
             config: torch_spyre_tests/test_allocator_e2e_config.yaml
+          - name: Test Memory Pressure GC
+            config: torch_spyre_tests/test_memory_pressure_gc_config.yaml
           - name: Test Launch Jobplan
             config: torch_spyre_tests/test_launch_jobplan_config.yaml
           - name: Test logging patterns
