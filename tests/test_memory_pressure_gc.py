@@ -244,9 +244,6 @@ class TestMemoryPressureGC:
         results = []
         results_lock = threading.Lock()
 
-        # Track GC collections
-        gc_count_before = gc.get_count()[0]
-
         def allocate_until_pressure(thread_id):
             """Each thread tries to allocate until hitting pressure."""
             try:
